@@ -1,0 +1,1 @@
+Temporary, checksum-gated bootstrap payload used to restore the repository's exact 32-commit history. The bootstrap branch is replaced by the restored project history after verification.
