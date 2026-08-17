@@ -1,0 +1,51 @@
+name: Bootstrap exact project history
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".bootstrap/READY"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-history
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore exact repository history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_URL: https://aiboot-bootstrap-96cc45c22b69.netlify.app/adaptive-iso-boot-v2-final.git.bundle
+          BUNDLE_SHA256: 96cc45c22b69032634cc30bf4c2932e07bd9ac140b4e6d65bbddce3c3c2fa6f0
+          EXPECTED_MAIN: 283d91c970f099d1fdbf4fc072140c6cb2444f12
+          EXPECTED_COMMITS: "32"
+          EXPECTED_V010_TAG_OBJECT: 971e5d026ee4b630f032f321d83c815ea00391fe
+        run: |
+          set -euo pipefail
+
+          curl --fail --location --retry 4 --retry-all-errors \
+            "$BUNDLE_URL" -o /tmp/aiboot.bundle
+          echo "$BUNDLE_SHA256  /tmp/aiboot.bundle" | sha256sum -c -
+          git bundle verify /tmp/aiboot.bundle
+
+          rm -rf /tmp/aiboot-source
+          git clone /tmp/aiboot.bundle /tmp/aiboot-source
+          cd /tmp/aiboot-source
+
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN"
+          test "$(git rev-list --count HEAD)" = "$EXPECTED_COMMITS"
+          test "$(git rev-parse refs/tags/v0.1.0)" = "$EXPECTED_V010_TAG_OBJECT"
+
+          git remote remove origin || true
+          git remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin main:main
+          git push --force origin refs/tags/v0.1.0
