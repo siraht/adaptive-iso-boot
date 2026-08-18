@@ -1,5 +1,6 @@
-bundle_url=https://aiboot-bootstrap-96cc45c22b69.netlify.app/adaptive-iso-boot-v2-final.git.bundle
+bundle_source=.bootstrap/bundle/chunk-*
 bundle_sha256=96cc45c22b69032634cc30bf4c2932e07bd9ac140b4e6d65bbddce3c3c2fa6f0
 expected_main=283d91c970f099d1fdbf4fc072140c6cb2444f12
 expected_commits=32
 expected_v0.1.0_tag_object=971e5d026ee4b630f032f321d83c815ea00391fe
+trigger=2026-08-18T20:45:00Z
