@@ -19,11 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Restore exact repository history
         env:
           GH_TOKEN: ${{ github.token }}
-          BUNDLE_URL: https://aiboot-bootstrap-96cc45c22b69.netlify.app/adaptive-iso-boot-v2-final.git.bundle
           BUNDLE_SHA256: 96cc45c22b69032634cc30bf4c2932e07bd9ac140b4e6d65bbddce3c3c2fa6f0
           EXPECTED_MAIN: 283d91c970f099d1fdbf4fc072140c6cb2444f12
           EXPECTED_COMMITS: "32"
@@ -31,8 +32,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          curl --fail --location --retry 4 --retry-all-errors \
-            "$BUNDLE_URL" -o /tmp/aiboot.bundle
+          cat .bootstrap/bundle/chunk-* | base64 --decode > /tmp/aiboot.bundle
           echo "$BUNDLE_SHA256  /tmp/aiboot.bundle" | sha256sum -c -
           git bundle verify /tmp/aiboot.bundle
 
