@@ -1,0 +1,13 @@
+name: PR capability test
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  prove-actions:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "GitHub Actions is available"
