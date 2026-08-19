@@ -6,6 +6,8 @@ on:
     paths:
       - ".bootstrap/READY"
   workflow_dispatch:
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
@@ -16,6 +18,7 @@ concurrency:
 
 jobs:
   restore:
+    if: github.event_name != 'issues' || github.event.issue.title == '[aiboot] restore exact history'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
