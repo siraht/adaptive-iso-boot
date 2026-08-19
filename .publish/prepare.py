@@ -143,11 +143,11 @@ def prepare(root: Path, output: Path) -> str:
         bundle_path.write_bytes(bundle_bytes)
         patch_path.write_bytes(patch_bytes)
 
-        run("git", "bundle", "verify", str(bundle_path))
-        run("git", "clone", str(bundle_path), str(output))
+        run("git", "bundle", "verify", str(bundle_path), cwd=root)
+        run("git", "clone", str(bundle_path), str(output), cwd=root)
         verify_base(output)
 
-        run("git", "config", "user.name", "Adaptive ISO Boot Release")
+        run("git", "config", "user.name", "Adaptive ISO Boot Release", cwd=output)
         run("git", "config", "user.email", "73152895+siraht@users.noreply.github.com", cwd=output)
         run("git", "am", "--3way", str(patch_path), cwd=output)
 
