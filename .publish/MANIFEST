@@ -1,0 +1,8 @@
+base_bundle_sha256=96cc45c22b69032634cc30bf4c2932e07bd9ac140b4e6d65bbddce3c3c2fa6f0
+base_head=283d91c970f099d1fdbf4fc072140c6cb2444f12
+base_commits=32
+base_v0.1.0_tag_object=971e5d026ee4b630f032f321d83c815ea00391fe
+patch_gzip_sha256=b9b16f7688ee507fe5a5633dc6a3d0e9651ea853277b9bb2e00be7731577bfb2
+patch_commits=16
+expected_final_commits=48
+expected_version=0.2.0
