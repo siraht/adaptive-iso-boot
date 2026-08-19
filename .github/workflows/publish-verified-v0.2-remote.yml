@@ -1,0 +1,180 @@
+name: Verify and publish v0.2.0 from pinned bundle
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: publish-v0.2.0-pinned-bundle
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Verify payload and deterministic history
+    runs-on: ubuntu-latest
+    outputs:
+      final-sha: ${{ steps.identity.outputs.final-sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Reconstruct the exact source twice
+        run: |
+          python .publish/prepare_remote.py --output source-a
+          python .publish/prepare_remote.py --output source-b
+      - name: Prove deterministic identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          first="$(git -C source-a rev-parse HEAD)"
+          second="$(git -C source-b rev-parse HEAD)"
+          test "$first" = "$second"
+          test "$(git -C source-a rev-list --count HEAD)" = "48"
+          test "$(git -C source-a rev-parse refs/tags/v0.1.0)" = "971e5d026ee4b630f032f321d83c815ea00391fe"
+          echo "final-sha=$first" >> "$GITHUB_OUTPUT"
+
+  cross-platform:
+    name: Test ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Reconstruct verified source
+        run: python .publish/prepare_remote.py --output source
+      - name: Prove source identity
+        working-directory: source
+        run: python -c "import subprocess; assert subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() == '${{ needs.preflight.outputs.final-sha }}'"
+      - name: Install development dependencies
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run portable quality checks
+        working-directory: source
+        run: python scripts/quality_gate.py --skip-coverage --skip-wheel --skip-git
+
+  native-builds:
+    name: Build native executable / ${{ matrix.os }}
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Reconstruct verified source
+        run: python .publish/prepare_remote.py --output source
+      - name: Prove source identity
+        working-directory: source
+        run: python -c "import subprocess; assert subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() == '${{ needs.preflight.outputs.final-sha }}'"
+      - name: Install release dependencies
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[release]"
+      - name: Build native executable
+        working-directory: source
+        run: python scripts/build_standalone.py
+      - name: Smoke-test native executable
+        working-directory: source
+        run: python scripts/smoke_standalone.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepublish-standalone-${{ runner.os }}-${{ runner.arch }}
+          path: source/dist/standalone/*
+          if-no-files-found: error
+
+  release-gate:
+    name: Full Linux release gate
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Reconstruct verified source
+        run: python .publish/prepare_remote.py --output source
+      - name: Prove source identity
+        working-directory: source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ needs.preflight.outputs.final-sha }}"
+      - name: Install development dependencies
+        working-directory: source
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run complete release gate
+        working-directory: source
+        run: python scripts/quality_gate.py
+      - name: Build Python distributions
+        working-directory: source
+        run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepublish-python-package
+          path: |
+            source/dist/*.whl
+            source/dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish verified history and tags
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'agent/publish-v0.2.0'
+    needs: [preflight, cross-platform, native-builds, release-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reconstruct verified source
+        run: python .publish/prepare_remote.py --output source
+      - name: Prove source identity
+        working-directory: source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ needs.preflight.outputs.final-sha }}"
+      - name: Create annotated release tag
+        working-directory: source
+        run: |
+          git config user.name "Adaptive ISO Boot Release"
+          git config user.email "73152895+siraht@users.noreply.github.com"
+          git tag -a v0.2.0 -m "Adaptive ISO Boot v0.2.0"
+      - name: Publish main and tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote remove origin || true
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin HEAD:main
+          git push --force origin refs/tags/v0.1.0 refs/tags/v0.2.0
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$(git rev-parse HEAD)"
+          test "$(git ls-remote origin 'refs/tags/v0.2.0^{}' | awk '{print $1}')" = "$(git rev-parse HEAD)"
