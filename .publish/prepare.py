@@ -5,7 +5,8 @@ This script is intentionally dependency-free. It rebuilds the checksum-verified
 32-commit base repository from the staged Git bundle, applies the 16 granular
 cross-platform commits as an mbox series, and fails closed if any identity,
 commit-count, subject, or version invariant differs from the publication
-manifest.
+manifest. Committer dates are pinned to author dates so every runner produces
+the same commit objects and final SHA.
 """
 
 from __future__ import annotations
@@ -149,7 +150,14 @@ def prepare(root: Path, output: Path) -> str:
 
         run("git", "config", "user.name", "Adaptive ISO Boot Release", cwd=output)
         run("git", "config", "user.email", "73152895+siraht@users.noreply.github.com", cwd=output)
-        run("git", "am", "--3way", str(patch_path), cwd=output)
+        run(
+            "git",
+            "am",
+            "--3way",
+            "--committer-date-is-author-date",
+            str(patch_path),
+            cwd=output,
+        )
 
     return verify_final(output)
 
