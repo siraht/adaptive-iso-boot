@@ -10,11 +10,34 @@ permissions:
 
 concurrency:
   group: publish-v0.2.0
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
+  preflight:
+    name: Verify publication payload and deterministic history
+    runs-on: ubuntu-latest
+    outputs:
+      final-sha: ${{ steps.identity.outputs.final-sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Reconstruct source twice
+        run: |
+          python .publish/prepare.py --output source-a
+          python .publish/prepare.py --output source-b
+      - name: Prove deterministic commit identity
+        id: identity
+        run: |
+          test "$(git -C source-a rev-parse HEAD)" = "$(git -C source-b rev-parse HEAD)"
+          echo "final-sha=$(git -C source-a rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   cross-platform:
     name: Verify ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -30,6 +53,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Reconstruct verified source history
         run: python .publish/prepare.py --output source
+      - name: Check deterministic source identity
+        working-directory: source
+        run: python -c "import subprocess; assert subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() == '${{ needs.preflight.outputs.final-sha }}'"
       - name: Install development dependencies
         working-directory: source
         run: |
@@ -41,6 +67,7 @@ jobs:
 
   native-builds:
     name: Build native executable / ${{ matrix.os }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -55,6 +82,9 @@ jobs:
           python-version: "3.13"
       - name: Reconstruct verified source history
         run: python .publish/prepare.py --output source
+      - name: Check deterministic source identity
+        working-directory: source
+        run: python -c "import subprocess; assert subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() == '${{ needs.preflight.outputs.final-sha }}'"
       - name: Install release dependencies
         working-directory: source
         run: |
@@ -74,6 +104,7 @@ jobs:
 
   release-gate:
     name: Full release gate
+    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -84,6 +115,9 @@ jobs:
           python-version: "3.13"
       - name: Reconstruct verified source history
         run: python .publish/prepare.py --output source
+      - name: Check deterministic source identity
+        working-directory: source
+        run: test "$(git rev-parse HEAD)" = "${{ needs.preflight.outputs.final-sha }}"
       - name: Install development dependencies
         working-directory: source
         run: |
@@ -106,20 +140,19 @@ jobs:
   publish:
     name: Publish verified history and tags
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'agent/publish-v0.2.0'
-    needs: [cross-platform, native-builds, release-gate]
+    needs: [preflight, cross-platform, native-builds, release-gate]
     runs-on: ubuntu-latest
     outputs:
-      final-sha: ${{ steps.identity.outputs.final-sha }}
+      final-sha: ${{ needs.preflight.outputs.final-sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Reconstruct verified source history
         run: python .publish/prepare.py --output source
-      - name: Record verified identity
-        id: identity
+      - name: Check deterministic source identity
         working-directory: source
-        run: echo "final-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: test "$(git rev-parse HEAD)" = "${{ needs.preflight.outputs.final-sha }}"
       - name: Create annotated release tag
         working-directory: source
         run: |
