@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import gzip
 import hashlib
 import shutil
@@ -73,14 +74,74 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def decode_chunks(paths: list[Path], *, label: str) -> bytes:
+def _decode_exact(encoded: str) -> bytes:
+    return base64.b64decode(encoded, validate=True)
+
+
+def _repair_one_extra_character(chunks: list[str], expected_sha: str) -> tuple[bytes, int] | None:
+    """Recover a single inserted Base64 character in the final staged chunk.
+
+    The first six bundle chunks end on Base64 quantum boundaries. The historical
+    final chunk is one character longer than a valid encoding, so we can decode
+    the stable prefix once and try each possible character removal from only the
+    final chunk. A candidate is accepted solely when the decoded bytes match the
+    pinned SHA-256.
+    """
+
+    if not chunks or len(chunks[-1]) % 4 != 1:
+        return None
+    prefix_text = "".join(chunks[:-1])
+    if len(prefix_text) % 4:
+        return None
+    try:
+        prefix = _decode_exact(prefix_text)
+    except binascii.Error:
+        return None
+
+    prefix_digest = hashlib.sha256(prefix)
+    tail = chunks[-1]
+    for index in range(len(tail)):
+        candidate_text = tail[:index] + tail[index + 1 :]
+        try:
+            candidate = _decode_exact(candidate_text)
+        except binascii.Error:
+            continue
+        digest = prefix_digest.copy()
+        digest.update(candidate)
+        if digest.hexdigest() == expected_sha:
+            return prefix + candidate, index
+    return None
+
+
+def decode_chunks(paths: list[Path], *, label: str, expected_sha: str) -> bytes:
     if not paths:
         raise PublicationError(f"no staged {label} chunks were found")
-    encoded = "".join(path.read_text(encoding="ascii").strip() for path in paths)
+    chunks = [path.read_text(encoding="ascii").strip() for path in paths]
+    encoded = "".join(chunks)
+    decode_error: Exception | None = None
     try:
-        return base64.b64decode(encoded, validate=True)
-    except Exception as exc:  # binascii.Error is intentionally wrapped uniformly.
-        raise PublicationError(f"staged {label} is not valid base64: {exc}") from exc
+        decoded = _decode_exact(encoded)
+    except binascii.Error as exc:
+        decoded = b""
+        decode_error = exc
+    else:
+        if sha256(decoded) == expected_sha:
+            return decoded
+
+    repaired = _repair_one_extra_character(chunks, expected_sha)
+    if repaired is not None:
+        decoded, index = repaired
+        print(
+            f"recovered staged {label} by removing one checksum-proven character "
+            f"at final-chunk offset {index}",
+            file=sys.stderr,
+        )
+        return decoded
+
+    detail = f": {decode_error}" if decode_error is not None else ""
+    raise PublicationError(
+        f"staged {label} could not be decoded to pinned SHA-256 {expected_sha}{detail}"
+    )
 
 
 def git_value(repo: Path, *args: str) -> str:
@@ -123,11 +184,16 @@ def prepare(root: Path, output: Path) -> str:
     bundle_chunks = sorted((root / ".bootstrap/bundle").glob("chunk-*"))
     patch_chunks = sorted((root / ".publish/patch").glob("chunk-*"))
 
-    bundle_bytes = decode_chunks(bundle_chunks, label="base bundle")
-    require_equal(sha256(bundle_bytes), BASE_BUNDLE_SHA256, "base bundle SHA-256")
-
-    patch_gzip = decode_chunks(patch_chunks, label="patch")
-    require_equal(sha256(patch_gzip), PATCH_GZIP_SHA256, "patch gzip SHA-256")
+    bundle_bytes = decode_chunks(
+        bundle_chunks,
+        label="base bundle",
+        expected_sha=BASE_BUNDLE_SHA256,
+    )
+    patch_gzip = decode_chunks(
+        patch_chunks,
+        label="patch",
+        expected_sha=PATCH_GZIP_SHA256,
+    )
     try:
         patch_bytes = gzip.decompress(patch_gzip)
     except OSError as exc:
